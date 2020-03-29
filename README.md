@@ -1,12 +1,6 @@
 # kazhem_infra
 Kazhemskiy Mikhail OTUS-DevOps-2020-02 Infra repository
 
-~~~
-
-testapp_IP = 35.189.238.97
-testapp_port = 9292
-
-~~~
 
 # Домашние задания
 ## HomeWork 2: GitChatOps
@@ -96,7 +90,12 @@ someinternalhost_IP = 10.132.0.3
    * Веб-интерфейс доступен по адресу https://35.195.154.67.sslip.io/ с валидным сертификатом
 
 ## HomeWork4: Основные сервисы Google Cloud Platform (GCP)
+~~~
 
+testapp_IP = 35.189.238.97
+testapp_port = 9292
+
+~~~
 * Сделана установка и настройка [gcloud](https://cloud.google.com/sdk/docs/)
 * С помощью утилиты gcloud была создана тестовая ВМ c названием **reddit-app**
     ```
@@ -132,3 +131,48 @@ someinternalhost_IP = 10.132.0.3
       --allow tcp:9292 \
       --target-tags=puma-server
     ```
+## HomeWork5: Модели управления инфраструктурой Packer
+* Произведена установка [Packer](https://www.packer.io/downloads.html) на локальную машину
+* Установлен и авторизовн **Application Default Credentials** (ADC) для того, чтобы Packer мог управлять ресурсами GCP через API вызовы
+  ```
+  gcloud auth application-default login
+  ```
+* Создан Packer template [ubuntu16.json](packer/ubuntu16.json)
+    * Настроены **builders**, отвечающий за создание ВИ для билда
+    * Настроены **provisioners** с типо _shell_, устанавливающие MongoDB и Ruby с помощью скриптов [install_mongodb.sh](packer/scripts/install_mongodb.sh) и [install_ruby.sh](packer/scripts/install_ruby.sh)
+* [ubuntu16.json](packer/ubuntu16.json) проверен на наличие ошибок в синтакисисе
+   ```
+   packer validate ./ubuntu16.json
+   ```
+* Собран образ из шаблона [ubuntu16.json](packer/ubuntu16.json)
+   ```
+   packer build ubuntu16.json
+   ```
+* Создана ВМ через GUI GCP из собранного раннее образа
+* Вручную, через SSH, установлен и запущен puma server
+* Добавлены пользовательские переменные, обязателные вынесены в файл variables.json
+    ```
+    "variables": {
+        "project_id": null,
+        "source_image_family": null,
+        "machine_type": "f1-micro",
+        "ssh_username": "appuser"
+    },
+    ```
+* Запущена сборка образа с пользвательскими переменными
+  ```
+  packer build --var-file variables.json ubuntu16.json
+  ```
+* Добавлены новые поля в builders:
+  ```
+  "image_description": "Reddit base app image with mongo and redis installed",
+   "disk_size": 10,
+   "disk_type": "pd-standard",
+   "network": "default",
+   "tags": ["puma-server"],
+  ```
+ ### Задание со *
+ * Создан [puma.service](packer/files/puma.service) файл для автоматического запуска приложения
+ * Создан файл [startup_script.sh](packer/scripts/startup_script.sh) для установки и настройки сервиса для старта прложения при запуске ВМ
+ * Создан конфиг [immutable.json](packer/immutable.json) для packer, создающий образ семейства reddit-full с bake образом приложения
+ * Создан файл [create-reddit-vm.sh](config-scripts/create-reddit-vm.sh),запускающий команду gloud, создающую ВМ на основе образа reddit-full.
