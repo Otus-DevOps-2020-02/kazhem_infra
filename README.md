@@ -301,3 +301,55 @@ testapp_port = 9292
   * Необходимо было через переменные окружения передать `DATABASE_URL`. Было сделано через provisioner file с помощью атрибута `content`, который может записывать строку в файл:
   * Далее Unit service подкгружает переменные окружения из файла
   * Помимо прочего необходимо было сделать так, чтобы MongoDB поднималась не локалхосте, а, как минимум на 0.0.0.0. Поэтому при сборке образа с packer добалено изменение конфига mongod
+
+## Homework8: Управление конфигурацией. Знакомство с Ansible
+* Установлен [Ansible](https://docs.ansible.com/ansible/latest/installation_guide/intro_installation.html)
+* Создан [inventory.yml](ansible/inventory.yml) файл ([docs](https://docs.ansible.com/ansible/latest/user_guide/intro_inventory.html))
+* Протестирована работа модулей `shell`, `command`, `service`, `systemd` и сделан вывод о том, что использование специальных модулей для выполениня определенных команд (`systemd`, `service`) дают больше возможностей для дальнейшего использования вывода этих команд.
+* Создан playbook [clone.yml](ansible/clone.yml), который использует модуль `git` для клонирования репозитория. Если при запуске плейбука директория после клонирования гита изменилась - ансибл пишет `changed`.
+  ```
+  ansible-playbook clone.yml
+
+  PLAY [Clone] ***************************************************************************************
+
+  TASK [Gathering Facts] *****************************************************************************
+  ok: [appserver]
+
+  TASK [Clone repo] **********************************************************************************
+  changed: [appserver]
+
+  PLAY RECAP *****************************************************************************************
+  appserver                  : ok=2    changed=1    unreachable=0    failed=0
+  ```
+### Задание со *
+* Создан файл inventory.json в [формате](https://medium.com/@Nklya/динамическое-инвентори-в-ansible-9ee880d540d6) динмического инвентори. Создан из существуего файла inventory.yml (или ini).
+  ```
+  ansible-inventory --list > inventory.json
+  ```
+  *  Данный способ не совсем корректен, т.к. динамичский инвентори генерируется обычно из каких либо внешних источников. К примерну его можно сгенерировать с помощью плагина [gcp_compute](https://docs.ansible.com/ansible/latest/scenario_guides/guide_gce.html#gce-dynamic-inventory), который собирет информацию о машинах в GCP (не используется в силу ограничения задания)
+    ```
+    # ansible-inventory --list  -i inventory.gcp.yml
+    {
+    "_meta": {
+        "hostvars": {
+            "35.195.204.42": {
+                "canIpForward": false,
+                "cpuPlatform": "Intel Haswell",
+                "creationTimestamp": "2020-04-13T00:28:15.683-07:00",
+                "deletionProtection": false,
+                "disks": [
+                    {
+                        "autoDelete": true,
+                        "boot": true,
+                        "deviceName": "persistent-disk-0
+      ...
+    ```
+* Создан python скрипт `json_inventory.py`, который вовзращает содержимое json-инвентори по параметру `--list` и данные хоста с параметром `--host`.
+* Для того, чтобы использовать данный скрипт в качестве источника inventory по умолчаню, его можно прописать в `ansible.cfg` в качество значения ключа `inventory`:
+  ```
+  [defaults]
+  inventory = ./json_inventory.py
+  ...
+  ```
+* Вышеуказанный файл-плагин `inventory.gcp.yml` также можно указать в качестве инвентори, и тогда ansible будет динамически знать о вашей инфраструктуре GCP.
+* Команда `ansible all -m ping` выполнена успешно
