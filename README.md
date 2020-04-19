@@ -305,7 +305,7 @@ testapp_port = 9292
 ## Homework8: Управление конфигурацией. Знакомство с Ansible
 * Установлен [Ansible](https://docs.ansible.com/ansible/latest/installation_guide/intro_installation.html)
 * Создан [inventory.yml](ansible/inventory.yml) файл ([docs](https://docs.ansible.com/ansible/latest/user_guide/intro_inventory.html))
-* Протестирована работа модулей `shell`, `command`, `service`, `systemd` и сделан вывод о том, что использование специальных модулей для выполениня определенных команд (`systemd`, `service`) дают больше возможностей для дальнейшего использования вывода этих команд.
+* Протестирована работа модулей `shell`, `command`, `service`, `systemd` и сделан вывод о том, что использование специальных модулей для выполнения определенных команд (`systemd`, `service`) дают больше возможностей для дальнейшего использования вывода этих команд.
 * Создан playbook [clone.yml](ansible/clone.yml), который использует модуль `git` для клонирования репозитория. Если при запуске плейбука директория после клонирования гита изменилась - ансибл пишет `changed`.
   ```
   ansible-playbook clone.yml
@@ -353,3 +353,178 @@ testapp_port = 9292
   ```
 * Вышеуказанный файл-плагин `inventory.gcp.yml` также можно указать в качестве инвентори, и тогда ansible будет динамически знать о вашей инфраструктуре GCP.
 * Команда `ansible all -m ping` выполнена успешно
+
+## Homework9: Продолжение знакомства с Ansible: templates, handlers, dynamic inventory, vault, tags
+* Создан playbook [reddit_app.yml](ansible/reddit_app.yml)
+  * Настроены сценарии для хоста MongoDB
+    * Создан шаблон [mongod.conf.j2](ansible/templates/mongod.conf.j2), который с помощью модуля `templates` в плейбуке копирует, подставляя нужные значения переменных, шаблон настройки mongod на ВМ
+    * Добавлены `tags` для того, чтобы была возможность запускать playbook только по каким-то определенным тагам.
+    * Определены переменные в плейбке в секции `vars` - они будут переданы в шаблон
+    * Добавлены `handlers`, которые вызываются из `tasks` по параметру `notify` - в данном случае `task`, при статусе `changed` вызывает `handler`, который рестартует сервис монги (с помощью модуля `service`)
+    * Предварительный запуск `ansible-playbook` с параметром `--check` проходится по списку тасков, но не применяет их. Аналог `terraform plan`
+      ```
+      ansible-playbook reddit_app.yml --check --limit db
+      ```
+    * Применение конфигурации
+      ```
+      ansible-playbook reddit_app.yml --limit db
+
+      PLAY [Configure hosts & deploy application] *******************************************************************
+
+      TASK [Gathering Facts] ****************************************************************************************
+      ok: [dbserver]
+
+      TASK [Change mongo config file] *******************************************************************************
+      changed: [dbserver]
+
+      RUNNING HANDLER [restart mongod] ******************************************************************************
+      changed: [dbserver]
+
+      PLAY RECAP ****************************************************************************************************
+      dbserver                   : ok=3    changed=2    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+      ```
+  * Настроены сценарии для приложения
+    * С помощью модуля `copy` скопирован `unit.service` файл для сервера puma
+    * Добавлен таск, который через модуль `systemd` выставляет сирвису puma значение enabled
+    * Добавлен handler для перезапуска через `systemd` сервиса `puma`
+    * Добавлен шаблон для приложения, которые отвечает за определенных environment переменных
+  * Настроен деплой с помощью модулей `git` и `bundler`
+* Один play сценарий разделн на три (бд, приложение, деплой) в одном файле.
+* Далее разделили на три разных файла (`app.yml`, `db.yml`, `deploy.yml`), которые объеденины по средством `import_playbook` в `site.yml`
+
+###  Задание со *
+* В качестве dynamic inventory использован плагин [gcp_compute](https://docs.ansible.com/ansible/latest/scenario_guides/guide_gce.html#gce-dynamic-inventory), который был сконфигурирован в прошлом ДЗ
+  * [Пример](http://matthieure.me/2018/12/31/ansible_inventory_plugin.html) использования dynamic inventory вместе с параметром `keyed_groups` для группировки инстансов
+  * В файл [inventory.gcp.yml](ansible/inventory.gcp.yml) добавлены разделы:
+    * `hostnames` для отображения хостов по его имени в gcp
+      ```
+      hostnames:
+      - name
+      ```
+    * `compose` для задания переменных, которые будут доступны в плейбуках (`hostvars`) - данные переменны и так доступны в
+      ```
+      compose:
+      # add hostvar variables
+      ansible_host: networkInterfaces[0].accessConfigs[0].natIP # external ip
+      ansible_internal: networkInterfaces[0].networkIP # internal ip
+      ```
+      Чтобы посмотреть доступные переменные можно вывести их следущим образом из таска:
+      ```
+      - name: Debug
+        debug:
+          var: hostvars
+        tags:
+          - never
+          - debug
+      ```
+    * `keyed_groups` для распределения хостов по группам в зависмости от заданного значения в GCP (в данном случае labels)
+      ```
+      keyed_groups:
+        # Create groups from GCE labels
+        - prefix: ""
+          separator: ""
+          key: labels['group']
+      ```
+  * В настройки инстанса `terraform` app для параметра группировки добавлено
+    ```
+    labels       = {
+      group = "app"
+    }
+    ```
+  * В настройки инстанса `terraform` db для параметра группировки  добавлено
+    ```
+    labels       = {
+      group = "db"
+    }
+    ```
+  * В итоге, укав в `ansible.cfg` путь до динмического инвентори по умолчанию:
+    ```
+    #ansible-inventory --graph
+    @all:
+      |--@app:
+      |  |--reddit-app
+      |--@db:
+      |  |--reddit-db
+      |--@ungrouped:
+    ```
+  * В файле шаблона `db_config.j2` изменено значение переменной на:
+    ```
+    DATABASE_URL={{ hostvars[groups['db'][0]]['ansible_internal']}}
+    ```
+### Провижининг в Packer
+
+* Создан плейбук [packer_app.yml](ansible/packer_app.yml):
+  * Устанавливает Ruby и Bundler с помощью модуля [apt](https://docs.ansible.com/ansible/latest/modules/apt_module.html#apt-module)
+    ```
+    tasks:
+    - name: Install Ruby&Bundler
+      apt:
+        pkg:
+          - ruby-full
+          - ruby-bundler
+          - build-essential
+        update_cache: yes
+    ```
+* Создан плейбук [packer_db.yml](ansible/packer_db.yml):
+  * Добавляет публичный ключ GPG с помощью модуля [apt_key](https://docs.ansible.com/ansible/latest/modules/apt_key_module.html#apt-key-module)
+    ```
+    - name: Import MongoDB public GPG Key
+      apt_key:
+          keyserver: hkp://keyserver.ubuntu.com:80
+          id: 42F3E95A2C4F08279C4960ADD68FA50FEA312927
+    ```
+  * Добавлен репозиторий mongodb в список источников с помощью модуля [apt_repository](https://docs.ansible.com/ansible/latest/modules/apt_repository_module.html)
+    ```
+    - name: Add MongoDB repository into sources list
+      apt_repository:
+        repo: deb http://repo.mongodb.org/apt/ubuntu {{ansible_distribution_release}}/mongodb-org/3.2 multiverse
+        state: present
+    ```
+  * Установлен пакет `mongodb-org` c помощью [apt](https://docs.ansible.com/ansible/latest/modules/apt_module.html#apt-module)
+    ```
+    - name: Install MongoDB package
+      apt:
+        name: mongodb-org
+        update_cache: yes
+    ```
+  * В [systemd](https://docs.ansible.com/ansible/latest/modules/systemd_module.html#systemd-module) разрешен сервис mongod
+    ```
+    - name: enable mongod
+      systemd:
+        name: mongod
+        enabled: yes
+    ```
+* Эти плейбуки добавлены в качестве провиженоров в packer
+  ```
+  # packer/app.json
+  ...
+  "provisioners": [
+      {
+      "type": "ansible",
+      "playbook_file": "ansible/packer_app.yml"
+      }
+  ]
+  ...
+  ```
+  ```
+  # packer/db.json
+  ...
+  "provisioners": [
+    {
+      "type": "ansible",
+      "playbook_file": "ansible/packer_db.yml"
+    }
+  ]
+  ...
+  ```
+* Созданы образы с помощью packer
+  ```
+  ...
+  ==> googlecompute: Provisioning with Ansible...
+  ==> googlecompute: Executing Ansible: ansible-playbook --extra-vars packer_build_name=googlecompute packer_builder_type=googlecompute -o IdentitiesOnly=yes -i /tmp/packer-provisioner-ansible187949315 /home/kazhem/develop/otus/kazhem_infra/ansible/packer_db.yml -e ansible_ssh_private_key_file=/tmp/ansible-key049835316
+      googlecompute:
+      googlecompute: PLAY [Install MongoDB] *********************************************************
+  ...
+  ```
+* Созданы ВМ с помощью terraform
+* Запущен плейбук site.yml - приложение работает
