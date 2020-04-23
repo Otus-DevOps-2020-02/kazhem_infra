@@ -1,6 +1,31 @@
+[![Build Status](https://travis-ci.com/Otus-DevOps-2020-02/kazhem_infra.svg?branch=master)](https://travis-ci.com/Otus-DevOps-2020-02/kazhem_infra)
 # kazhem_infra
 Kazhemskiy Mikhail OTUS-DevOps-2020-02 Infra repository
 
+- [kazhem_infra](#kazhem_infra)
+- [Домашние задания](#Домашние-задания)
+  - [HomeWork 2: GitChatOps](#homework-2-gitchatops)
+  - [HomeWork3: Знакомство с облачной инфраструктурой](#homework3-Знакомство-с-облачной-инфраструктурой)
+  - [HomeWork4: Основные сервисы Google Cloud Platform (GCP)](#homework4-Основные-сервисы-google-cloud-platform-gcp)
+  - [HomeWork5: Модели управления инфраструктурой Packer](#homework5-Модели-управления-инфраструктурой-packer)
+    - [Задание со *](#Задание-со-)
+  - [Homework6: Знакомство с Terraform](#homework6-Знакомство-с-terraform)
+    - [Основное задание](#Основное-задание)
+    - [Самостоятельные задания](#Самостоятельные-задания)
+    - [Задание со *](#Задание-со--1)
+    - [Задание с **](#Задание-с-)
+  - [Homework7: Принципы организации инфраструктурного кода и работа над инфраструктурой в команде на примере Terraform](#homework7-Принципы-организации-инфраструктурного-кода-и-работа-над-инфраструктурой-в-команде-на-примере-terraform)
+    - [Самостоятельное задание](#Самостоятельное-задание)
+    - [Задание со *](#Задание-со--2)
+    - [Задание с **](#Задание-с--1)
+  - [Homework8: Управление конфигурацией. Знакомство с Ansible](#homework8-Управление-конфигурацией-Знакомство-с-ansible)
+    - [Задание со *](#Задание-со--3)
+  - [Homework9: Продолжение знакомства с Ansible: templates, handlers, dynamic inventory, vault, tags](#homework9-Продолжение-знакомства-с-ansible-templates-handlers-dynamic-inventory-vault-tags)
+    - [Задание со *](#Задание-со--4)
+    - [Провижининг в Packer](#Провижининг-в-packer)
+  - [Homework10 Ansible роли, управление настройками нескольких окружений и best practices](#homework10-ansible-роли-управление-настройками-нескольких-окружений-и-best-practices)
+    - [Задание со *](#Задание-со--5)
+    - [Задание с **](#Задание-с--2)
 
 # Домашние задания
 ## HomeWork 2: GitChatOps
@@ -528,3 +553,242 @@ testapp_port = 9292
   ```
 * Созданы ВМ с помощью terraform
 * Запущен плейбук site.yml - приложение работает
+
+
+## Homework10 Ansible роли, управление настройками нескольких окружений и best practices
+
+* Для хранения ролей создана дирректория `ansible/roles`
+* Знакомство с [ansible-galaxy](https://galaxy.ansible.com/intro) - место хранения *community roles*
+* С помощью `ansible-galaxy ` создана структура наших ролей `app` и `db`:
+  ```
+  $ ansible-galaxy init app
+  $ ansible-galaxy init db
+  ```
+  ```
+  $ ansible-galaxy init db
+  - db was created successfully
+  $ tree db
+  db
+  ├── defaults            # <-- Директория для переменных по умолчанию
+  │   └── main.yml
+  ├── files
+  ├── handlers
+  │   └── main.yml
+  ├── meta                # <-- Информация о роли, создателе и зависимостях
+  │   └── main.yml
+  ├── README.md
+  ├── tasks               # <-- Директория для тасков
+  │   └── main.yml
+  ├── tests
+  │   ├── inventory
+  │   └── test.yml
+  └── vars                # <-- Директория для переменных, которые не должны
+      └── main.yml
+  6 directories, 8 files
+  ```
+* Роли вызываются из плейбуков из директории `roles`
+  ```
+  roles:
+    - db
+  ```
+
+* В директории `ansible/enviroments` созданы окружения `stage` и `prod`
+* Также туда перенес файл `inventory` (в качестве значения по умолчанию указан тот, что в окружении stage)
+* Директория `group_vars`, созданная в директории плейбука или инвентори файла позволяет создавать файлы (имена, которых должны соответствовать названиям групп в инвентори файле) для определения переменных для группы хостов. (созданы)
+* В ролях создан таск, для того чтобы отображать текущее окружение (через переменные group_vars группы `all`)
+  ```
+  - name: Show info about the env this host belongs to
+    debug:
+      msg: "This host is in {{ env }} environment!!!"
+  ```
+* Все плейбуки из корня директории `ansible` перенесены в дирректорию `ansible/playbooks`, а другие старые файлы перенесены в дирректорию `ansible/old`. В итоге получилась следущая структура дирректории `ansible`:
+  <details>
+  <summary>Подробнее</summary>
+  ```
+  ansible
+  ├── ansible.cfg
+  ├── environments
+  │   ├── prod
+  │   │   ├── credentials.yml
+  │   │   ├── group_vars
+  │   │   │   ├── all
+  │   │   │   ├── app
+  │   │   │   └── db
+  │   │   ├── inventory
+  │   │   ├── inventory.gcp.yml
+  │   │   └── requirements.yml
+  │   └── stage
+  │       ├── credentials.yml
+  │       ├── group_vars
+  │       │   ├── all
+  │       │   ├── app
+  │       │   └── db
+  │       ├── inventory
+  │       ├── inventory.gcp.yml
+  │       └── requirements.yml
+  ├── old
+  │   ├── files
+  │   │   └── puma.service
+  │   ├── inventory.json
+  │   ├── inventory.yml
+  │   ├── json_inventory.py
+  │   └── templates
+  │       ├── db_config.j2
+  │       └── mongod.conf.j2
+  ├── playbooks
+  │   ├── app.yml
+  │   ├── clone.yml
+  │   ├── db.yml
+  │   ├── deploy.yml
+  │   ├── packer_app.yml
+  │   ├── packer_db.yml
+  │   ├── reddit_app_multiple_plays.yml
+  │   ├── reddit_app_one_play.yml
+  │   ├── site.yml
+  │   └── users.yml
+  ├── requirements.txt
+  └── roles
+      ├── app
+      │   ├── defaults
+      │   │   └── main.yml
+      │   ├── files
+      │   │   └── puma.service
+      │   ├── handlers
+      │   │   └── main.yml
+      │   ├── meta
+      │   │   └── main.yml
+      │   ├── README.md
+      │   ├── tasks
+      │   │   └── main.yml
+      │   ├── templates
+      │   │   └── db_config.j2
+      │   ├── tests
+      │   │   ├── inventory
+      │   │   └── test.yml
+      │   └── vars
+      │       └── main.yml
+      ├── db
+      │   ├── defaults
+      │   │   └── main.yml
+      │   ├── files
+      │   ├── handlers
+      │   │   └── main.yml
+      │   ├── meta
+      │   │   └── main.yml
+      │   ├── README.md
+      │   ├── tasks
+      │   │   └── main.yml
+      │   ├── templates
+      │   │   └── mongod.conf.j2
+      │   ├── tests
+      │   │   ├── inventory
+      │   │   └── test.yml
+      │   └── vars
+      │       └── main.yml
+      └── jdauphant.nginx
+          ├── ansible.cfg
+          ├── defaults
+          │   └── main.yml
+          ├── handlers
+          │   └── main.yml
+          ├── meta
+          │   └── main.yml
+          ├── README.md
+          ├── tasks
+          │   ├── amplify.yml
+          │   ├── cloudflare_configuration.yml
+          │   ├── configuration.yml
+          │   ├── ensure-dirs.yml
+          │   ├── installation.packages.yml
+          │   ├── main.yml
+          │   ├── nginx-official-repo.yml
+          │   ├── remove-defaults.yml
+          │   ├── remove-extras.yml
+          │   ├── remove-unwanted.yml
+          │   └── selinux.yml
+          ├── templates
+          │   ├── auth_basic.j2
+          │   ├── config_cloudflare.conf.j2
+          │   ├── config.conf.j2
+          │   ├── config_stream.conf.j2
+          │   ├── module.conf.j2
+          │   ├── nginx.conf.j2
+          │   ├── nginx.repo.j2
+          │   └── site.conf.j2
+          ├── test
+          │   ├── custom_bar.conf.j2
+          │   ├── example-vars.yml
+          │   └── test.yml
+          ├── Vagrantfile
+          └── vars
+              ├── Debian.yml
+              ├── empty.yml
+              ├── FreeBSD.yml
+              ├── main.yml
+              ├── RedHat.yml
+              └── Solaris.yml
+
+  36 directories, 85 files
+  ```
+  </details>
+* В [ansible.cfg](ansible/ansible.cfg) доабвлены селудюшие параметы:
+  ```
+  [defaults]
+  ...
+  # # Явно укажем расположение ролей (можно задать несколько путей через ; )
+  roles_path = ./roles
+  [diff]
+  # Включим обязательный вывод diff при наличии изменений и вывод 5 строк контекста
+  always = True
+  context = 5
+  ```
+* Протестирована работа плейбуков после ретструктаризации
+* Для установки `community-roles` из `ansible-galaxy` в папках окружений создают файл `requirements.yml`. Пример содержимого с ролью [jdauphant.nginx](https://github.com/jdauphant/ansible-role-nginx):
+  ```
+  - src: jdauphant.nginx
+    version: v2.21.1
+  ```
+* Пример установки:
+  ```
+  ansible-galaxy install -r environments/stage/requirements.yml
+  ```
+* Комьюнити-роли не стоит коммитить в свой репозиторий, для этого в `.gitignore` добавлена запись:  `jdauphant.nginx`
+* Переменные роли в group_vars/app:
+  ```
+  nginx_sites:
+    default:
+      - listen 80
+      - server_name "reddit"
+      - location / {
+          proxy_pass http://127.0.0.1:порт_приложения;
+        }
+  ```
+* В терраформ добавлено открытие 80 порта, роль nginx добавлена в плейбук `app.yml` (приложение после завпуска плейбука доступно на 80 порту)
+* Добавлен плейбук users.yml, который создает пользователей в систме. Его перепенные хранятся в `environments/prod|stage/credentials.yml`
+* Создан `vault.key` вне дирриктории проекта и добавлен в `ansible.cfg`:
+  ```
+  [defaults]
+  ...
+  vault_password_file = ~/.ansible/vault.key
+  ```
+* Файл `credentials.yml` зашифрован с помощью [ansible-vault](https://docs.ansible.com/ansible/devel/user_guide/vault.html)
+  ```
+  $ ansible-vault encrypt environments/prod/credentials.yml
+  $ ansible-vault encrypt environments/stage/credentials.yml
+  ```
+* Файл можно редактировать с помощью команды `ansible-vault edit <file>` и расшифровать `ansible-vault decrypt <file>`
+
+
+### Задание со *
+* Для наладки работы приложения с учетом измениний в прощлом дз необходимо было только скопировать `inventory.gcp.yml` в дерриктории `enviroments/stage` и `enviroments/prod` и изменить путь инвентори по умолчанию.
+
+
+### Задание с **
+* С помощью [документации](https://medium.com/@Nklya/%D0%BB%D0%BE%D0%BA%D0%B0%D0%BB%D1%8C%D0%BD%D0%BE%D0%B5-%D1%82%D0%B5%D1%81%D1%82%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D0%B5-%D0%B2-travisci-2b5ef9adb16e) натсроена утилита `trytravis`. С ее помощью можно проводить тесты и отладку трависа в другом репозитории (kazhem/otus-trytravis).
+* Что делает [travis](.travis.yml):
+  * Проверка ДЗ (было)
+  * `packer validate` для всех шаблонов
+  * `terraform validat`e и `tflint` для окружений stage и prod
+  * `ansible-lint` для плейбуков Ansible
+
+* В README.md добавлен бейдж с статусом билда
