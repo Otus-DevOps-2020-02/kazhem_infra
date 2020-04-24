@@ -26,6 +26,9 @@ Kazhemskiy Mikhail OTUS-DevOps-2020-02 Infra repository
   - [Homework10 Ansible роли, управление настройками нескольких окружений и best practices](#homework10-ansible-роли-управление-настройками-нескольких-окружений-и-best-practices)
     - [Задание со *](#Задание-со--5)
     - [Задание с **](#Задание-с--2)
+  - [Homework11 Разработка и тестирование Ansible ролей и плейбуков](#homework11-Разработка-и-тестирование-ansible-ролей-и-плейбуков)
+    - [Доработка ролей](#Доработка-ролей)
+    - [Задание со ☆](#Задание-со--6)
 
 # Домашние задания
 ## HomeWork 2: GitChatOps
@@ -792,3 +795,108 @@ testapp_port = 9292
   * `ansible-lint` для плейбуков Ansible
 
 * В README.md добавлен бейдж с статусом билда
+
+
+## Homework11 Разработка и тестирование Ansible ролей и плейбуков
+
+* Установлен [VirtualBox](https://www.virtualbox.org/wiki/Downloads)
+* Установлен [Vagrant](https://www.vagrantup.com/downloads.html)
+* Добавлен [Vagrantfile](ansible/Vagrantfile) с описанием terraform-инфраструктуры в vagrant
+* Выполнен `vagrant up` для скачивания и запуска образов в соответсвии с файлом
+* Краткий список команд
+  * Проверка что бокс скачан `vagrant box list`
+  * Посмотреть список запущенных ВМ `vagrant status`
+  * Подключиться к ВП по ssh `vagrant ssh VMNAME`
+  * Запустить провиженер `vagrant provision [VMNAME]`
+
+### Доработка ролей
+* [Провиженинг](https://www.vagrantup.com/docs/provisioning/) в Vagrant
+* Добавлен провиженер в [Vagrantfile](ansible/Vagrantfile) ВМ `db`
+  ```ruby
+  db.vm.provision "ansible" do |ansible|
+    ansible.playbook = "playbooks/site.yml"
+    ansible.groups = {
+    "db" => ["dbserver"],
+    "db:vars" => {"mongo_bind_ip" => "0.0.0.0"}
+    }
+  end
+  ```
+* Запущен провиженер `vagrant provision dbserver`
+* Возникла ошибка:
+  ```
+  fatal: [dbserver]: FAILED! => {"changed": false, "msg": "Could not find the requested service mongod: host"}
+  ```
+  Причина -- роль [db](ansible/roles/db) писалась с учётом базового packer-образа с уже установленной MongoDB
+* В роль [db](ansible/roles/db) добавлены задачи по установке MongoDB
+* Провиженинг завершён успешно
+* Добавлен плейбук [base.yml](ansible/playbooks/base.yml) для установки python если он не установлен.
+
+* Задачи роли [db](ansible/roles/db) из [db/tasks/main.yml](ansible/roles/db/tasks/main.yml) разнесены по файлам
+  * Задачи по установке MongoDB вынесены в [install_mongodb.yml](ansible/roles/db/tasks/install_mongodb.yml)
+  * Задачи по настройке MongoDB вынесены в [config_mongodb.yml](ansible/roles/db/tasks/config_mongodb.yml)
+* Для проверки, повторно выполнен провиженинг. Прошёл успешно
+
+* Задачи роли [app](ansible/roles/app) из [main.yml](ansible/roles/app/tasks/main.yml) разнесены по файлам
+  * Задачи по установке MongoDB вынесены в [ruby.yml](ansible/roles/app/tasks/ruby.yml)
+  * Задачи по настройке MongoDB вынесены в [puma.yml](ansible/roles/app/tasks/puma.yml)
+* Добавлен провиженер в [Vagrantfile](ansible/Vagrantfile) ВМ `app`
+  ```ruby
+  db.vm.provision "ansible" do |ansible|
+    ansible.playbook = "playbooks/site.yml"
+    ansible.groups = {
+    "db" => ["appserver"],
+    "app:vars" => { "db_host" => "10.10.10.10"}
+    }
+  end
+  ```
+* Запущен провиженер `vagrant provision appserver`. Возникла ошибка:
+  ```
+  TASK [app : Add config for DB connection] **************************************
+  fatal: [appserver]: FAILED! => {"changed": false, "checksum": "dfbe4b5cf3ec32d91d20045e2ee7f7b26c60ef34", "msg": "Destination directory /home/appuser does not exist"}
+  ```
+* Для исправления ошибки, параметризована роль [app](ansible/roles/app)
+  * В переменные по умолчанию [app/defaults/main.yml](ansible/roles/app/defaults/main.yml) добавлен `deploy_user: appuser`
+  * `puma.service` из `files` перемещён в `templates`
+  * В шаблоне [puma.service.j2](ansible/roles/app/templates/puma.service.j2) все упоминания пользователя `appuser` заменены на переменную `{{ deploy_user }}`
+  * В [puma.yml](ansible/roles/app/tasks/puma.yml) все упоминания пользователя `appuser` заменены на переменную `{{ deploy_user }}`
+* Также `appuser` заменён на `{{ deploy_user }}` в [deploy.yml](ansible/playbooks/deploy.yml)
+* В [Vagrantfile](ansible/Vagrantfile) добавлено переопределение переменных для провиженера
+  ```ruby
+  config.vm.define "appserver" do |app|
+    ...
+
+    app.vm.provision "ansible" do |ansible|
+      ...
+      ansible.extra_vars = {
+        "deploy_user" => "vagrant"
+      }
+    end
+  end
+  ```
+* Запущен провиженер `vagrant provision appserver`. Прошёл успешно
+
+* Проверена работа приложения [http://10.10.10.20:9292/](http://10.10.10.20:9292/). Успешно.
+* Конфигурация пересоздана, перепроверена и удалена
+  ```shell
+  vagrant destroy -f
+  vagrant up
+  #open in browser http://10.10.10.20:9292/
+  vagrant destroy -f
+  ```
+### Задание со ☆
+* Настройки nginx перенесены из `enviroments/stage/group_vars/app` в [Vagrantfile](ansible/Vagrantfile)
+  ```ruby
+    ansible.extra_vars = {
+      "deploy_user" => "vagrant",
+      "nginx_sites" => {
+        "default" => [
+          "listen 80",
+          "server_name \"reddit\"",
+          "location / {
+            proxy_pass http://127.0.0.1:9292;
+          }"
+        ]
+      }
+    }
+    ```
+* Результат проверен. Сайт открывается по адресу [http://10.10.10.20](http://10.10.10.20)
