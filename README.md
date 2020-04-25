@@ -29,6 +29,11 @@ Kazhemskiy Mikhail OTUS-DevOps-2020-02 Infra repository
   - [Homework11 Разработка и тестирование Ansible ролей и плейбуков](#homework11-Разработка-и-тестирование-ansible-ролей-и-плейбуков)
     - [Доработка ролей](#Доработка-ролей)
     - [Задание со ☆](#Задание-со--6)
+- [check if MongoDB is enabled and running](#check-if-mongodb-is-enabled-and-running)
+- [check if configuration file contains the required line](#check-if-configuration-file-contains-the-required-line)
+- [check mongod is listening on 0.0.0.0:27017](#check-mongod-is-listening-on-000027017)
+  - [# ansible/playbooks/packer_app.yml](#h1-idansibleplaybookspacker_appyml-132ansibleplaybookspacker_appymlh1)
+  - [# ansible/playbooks/packer_db.yml](#h1-idansibleplaybookspacker_dbyml-125ansibleplaybookspacker_dbymlh1)
 
 # Домашние задания
 ## HomeWork 2: GitChatOps
@@ -900,3 +905,101 @@ testapp_port = 9292
     }
     ```
 * Результат проверен. Сайт открывается по адресу [http://10.10.10.20](http://10.10.10.20)
+
+
+### Тестирование ролей при помощи Molecule и Testinfra
+
+* В [ansible/requirements.txt](ansible/requirements.txt) добавлены зависимости от:
+  ```
+  ...
+  ansible>=2.9
+  molecule >=2.6, <3  # в 3й версии сильно нарушена обратная совместимость с версией 2
+  testinfra>=1.10
+  python-vagrant>=0.5.15
+  ```
+* Создание заготовки тестов `cd ansible/roles/db && molecule init scenario --scenario-name default -r db -d vagrant`
+* В [test_default.py](ansible/roles/db/molecule/default/tests/test_default.py) добавлены 2 теста
+  ```python
+  # check if MongoDB is enabled and running
+  def test_mongo_running_and_enabled(host):
+      mongo = host.service("mongod")
+      assert mongo.is_running
+      assert mongo.is_enabled
+
+  # check if configuration file contains the required line
+  def test_config_file(host):
+      config_file = host.file('/etc/mongod.conf')
+      assert config_file.contains('bindIp: 0.0.0.0')
+      assert config_file.is_file
+  ```
+* Создана ВМ для проверки роли `cd ansible/roles/db && molecule create`
+* Список созданных инстансов `cd ansible/roles/db && molecule list`
+* Подключиться к инстансу по ssh `cd ansible/roles/db && molecule login -h instance`
+* Проверка выполнения роли [playbook.yml](ansible/roles/db/molecule/default/playbook.yml) `cd ansible/roles/db && molecule converge`
+* Прогон тестов из [tests/test_default.py](ansible/roles/db/molecule/default/tests/test_default.py) `cd ansible/roles/db && molecule verify`
+
+* Докупентация по [testinfra](https://testinfra.readthedocs.io/en/latest/modules.html)
+* В тесты [test_default.py](ansible/roles/db/molecule/default/tests/test_default.py) добавлена проверка, что MongoDB слушает на порту 27017
+  ```python
+  # check mongod is listening on 0.0.0.0:27017
+  def test_mongo_socket(host):
+      socket = host.socket("tcp://0.0.0.0:27017")
+      assert socket.is_listening
+  ```
+### Переключение сбора образов пакером на использование ролей
+* Ранее в роль `db` добавлены таги `install` на таски в [install_mongo.yml](ansible/roles/db/tasks/install_mongo.yml)
+* Ранее в роль `app` добавлены таги `ruby` на таски в [puma.yml](ansible/roles/app/tasks/puma.yml)
+* Таски в плейбуке [packer_app.yml](ansible/playbooks/packer_app.yml) и в [packer_db.yml](ansible/playbooks/packer_db.yml) заменены на роли app и db соответсенно:
+  ```
+  # ansible/playbooks/packer_app.yml
+  ---
+  - name: Install Ruby
+    hosts: default
+    become: true
+    roles:
+      - app
+  ```
+  ```
+  # ansible/playbooks/packer_db.yml
+  ---
+  - name: Install MongoDB
+    hosts: default
+    become: true
+    roles:
+      - db
+  ```
+* Далее необходимо было заменить настроки провижининга в [app.json](packer/app.json) и [db.json](packer/db.json):
+  ```json
+  #packer/app.json
+  ...
+   "provisioners": [
+      {
+      "type": "ansible",
+      "playbook_file": "ansible/playbooks/packer_app.yml",
+      "ansible_env_vars": [
+        "ANSIBLE_ROLES_PATH=./ansible/roles"
+      ],
+      "extra_arguments": [
+        "--tags",
+        "ruby"
+      ]
+    }
+  ]
+  ```
+  ```json
+  #packer/db.json
+  ...
+   "provisioners": [
+      {
+      "type": "ansible",
+      "playbook_file": "ansible/playbooks/packer_db.yml",
+      "ansible_env_vars": [
+        "ANSIBLE_ROLES_PATH=./ansible/roles"
+      ],
+      "extra_arguments": [
+        "--tags",
+        "install"
+      ]
+    }
+  ]
+  ```

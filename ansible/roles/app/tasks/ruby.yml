@@ -6,3 +6,4 @@
       - ruby-bundler
       - build-essential
     update_cache: yes
+  tags: ruby
