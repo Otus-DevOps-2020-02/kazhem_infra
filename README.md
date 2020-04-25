@@ -32,8 +32,9 @@ Kazhemskiy Mikhail OTUS-DevOps-2020-02 Infra repository
 - [check if MongoDB is enabled and running](#check-if-mongodb-is-enabled-and-running)
 - [check if configuration file contains the required line](#check-if-configuration-file-contains-the-required-line)
 - [check mongod is listening on 0.0.0.0:27017](#check-mongod-is-listening-on-000027017)
-  - [# ansible/playbooks/packer_app.yml](#h1-idansibleplaybookspacker_appyml-132ansibleplaybookspacker_appymlh1)
-  - [# ansible/playbooks/packer_db.yml](#h1-idansibleplaybookspacker_dbyml-125ansibleplaybookspacker_dbymlh1)
+  - [# ansible/playbooks/packer_app.yml](#h1-idansibleplaybookspacker_appyml-141ansibleplaybookspacker_appymlh1)
+  - [# ansible/playbooks/packer_db.yml](#h1-idansibleplaybookspacker_dbyml-134ansibleplaybookspacker_dbymlh1)
+    - [Задание со ☆ Подключение Travis CI для автоматического прогона тестов](#Задание-со--Подключение-travis-ci-для-автоматического-прогона-тестов)
 
 # Домашние задания
 ## HomeWork 2: GitChatOps
@@ -1003,3 +1004,4 @@ testapp_port = 9292
     }
   ]
   ```
+### Задание со ☆ Подключение Travis CI для автоматического прогона тестов

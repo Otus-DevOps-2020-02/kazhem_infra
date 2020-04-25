@@ -3,4 +3,4 @@
   hosts: default
   become: true
   roles:
-    - db
+    - kazhem.db
