@@ -32,9 +32,10 @@ Kazhemskiy Mikhail OTUS-DevOps-2020-02 Infra repository
 - [check if MongoDB is enabled and running](#check-if-mongodb-is-enabled-and-running)
 - [check if configuration file contains the required line](#check-if-configuration-file-contains-the-required-line)
 - [check mongod is listening on 0.0.0.0:27017](#check-mongod-is-listening-on-000027017)
-  - [# ansible/playbooks/packer_app.yml](#h1-idansibleplaybookspacker_appyml-141ansibleplaybookspacker_appymlh1)
-  - [# ansible/playbooks/packer_db.yml](#h1-idansibleplaybookspacker_dbyml-134ansibleplaybookspacker_dbymlh1)
-    - [Задание со ☆ Подключение Travis CI для автоматического прогона тестов](#Задание-со--Подключение-travis-ci-для-автоматического-прогона-тестов)
+  - [# ansible/playbooks/packer_app.yml](#h1-idansibleplaybookspacker_appyml-529ansibleplaybookspacker_appymlh1)
+  - [# ansible/playbooks/packer_db.yml](#h1-idansibleplaybookspacker_dbyml-529ansibleplaybookspacker_dbymlh1)
+  - [yaml](#yaml)
+      - [Автоматизированное тестирование в travic-ci внешней роли db средствами molecule в gce](#Автоматизированное-тестирование-в-travic-ci-внешней-роли-db-средствами-molecule-в-gce)
 
 # Домашние задания
 ## HomeWork 2: GitChatOps
@@ -1005,3 +1006,124 @@ testapp_port = 9292
   ]
   ```
 ### Задание со ☆ Подключение Travis CI для автоматического прогона тестов
+#### Вынесение роли в отдельный репозиторий
+Подготовка репозитория
+* Создан GitHub-репозиторий [ansible-role-db](https://github.com/kazhem/ansible-role-db)
+* Созданный пустой репозиторий склонирован в `../ansible-role-db`
+* Созержимое [ansible/roles/db](ansible/roles/db) перенесено в `../ansible-role-db`
+* При попытке выполнить `molecule converge` не удалось найти роль `db`.
+  **Исправлена** приведением файла `../ansible-role-db/molecule/default/playbook.yml` к следующему содержимому:
+  ```yaml
+  ---
+  ...
+    roles:
+      - role: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') | basename }}"
+* Текущей ревизии назначен тег `git tag v0.1`
+* Выполнен пуш репозитория в GitHub, включая теги `git push --tags`
+
+Переход на использование внешней роли
+* В зависимости [stage/requirements.yml](ansible/environments/stage/requirements.yml) и [prod/requirements.yml](ansible/environments/prod/requirements.yml) добавлена созданная роль
+  ```yaml
+  - name: kazhem.db
+    src: https://github.com/kazhem/ansible-role-db
+    version: v0.1
+  ```
+* Роль добавлена в [.gitignore](.gitignore)
+* Выполнена установка зависимостей
+  ```shell
+  ansible-galaxy install -r environments/stage/requirements.yml
+  ```
+* Плейбук [db.yml](ansible/playbooks/db.yml) переделан на использование новой роли
+  ```yaml
+  - name: Configure MongoDB
+    hosts: db
+    become: true
+    vars:
+      mongo_bind_ip: 0.0.0.0
+    roles:
+      - kazhem.db
+  ```
+
+* Содержимое [app/templates/db_config.j2](ansible/roles/app/templates/db_config.j2) исправлено на
+  ```jinja
+  {% if env == 'local' %}
+  DATABASE_URL={{ db_host }}
+  {% elif env in ['stage', 'prod'] %}
+  DATABASE_URL={{ hostvars[groups['db'][0]]['ansible_internal']}}
+  {% endif %}
+  ```
+  В случае запуска в локальном окружении, значение переменной берётся из переменной `db_host`. Иначе получается динамически с первого хоста в группе `db`
+
+* Плейбук `packer_db.yml` также настроена на использование внешней роли
+
+#### Автоматизированное тестирование в travic-ci внешней роли db средствами molecule в gce
+[Пример](https://github.com/Artemmkin/test-ansible-role-with-travis) роли и еще [пример](https://github.com/jonashackt/molecule-ansible-google-cloud)
+
+
+* Создан ssh-ключ `ssh-keygen -t rsa -f google_compute_engine -C 'travis' -q -N ''`
+* Публичный ключ добавлен в  проект infra в gcp через веб интерфейс
+* Создан сервис-аккаунт (IAM & admin -> Service accounts) `travis-ci`
+  * Присвоена роль `Editor`
+* Для корректной работы описанных действий нужен molecul версии ниже 3й
+* Создан шаблон сценрия gce:
+  ```
+  molecule init scenario --scenario-name gce  -d gce
+  ```
+* Скопированы тесты и переменные из сценария default (см выше)
+* Заполнена информация о роли [meta](meta/main.yml)
+* **ПРИМЕЧАНИЕ** Для отключения опции `no_log` при создании инстанса, нужно в плейбуке `molecule/gce/create.yml` и `destroy.yml` добавить переменную `molecule_no_log` в секцию `vars`.
+* Важно использование travis-ci.com (а не .org)
+* В `../ansible-role-db/.travis.yml` добавлены переменные окружения в **зашифрованном** виде
+  ```shell
+  travis encrypt GCE_SERVICE_ACCOUNT_EMAIL='travis-ci@infra-12345.iam.gserviceaccount.com' --add --pro
+  travis encrypt GCE_CREDENTIALS_FILE='$(PWD)/credentials.json' --add --pro
+  travis encrypt GCE_PROJECT_ID='infra-12345' --add --pro
+  ```
+* Зашифрованы файлы
+  ```shell
+  tar cvf secrets.tar credentials.json google_compute_engine
+  travis login --pro
+  travis encrypt-file secrets.tar --add --pro
+  ```
+* Удалось добиться успешного подключения к GCE во время билда (первая стадия `destroy`), после указания в секретный переменных пути к файлам в текущей директории через:
+  ```
+  env:
+  matrix:
+  - GCE_CREDENTIALS_FILE="$(pwd)/credentials.json"
+  ```
+* Также можно добавлять секретные переменный окружения через веб интерфейс на сайте travis-ci.com
+* В `../ansible-role-db/.travis.yml` добавлена переменная `USER`
+* Содержимое `../ansible-role-db/.travis.yml` после всех модификаций (исключены секреты)
+  <details><summary>.travis.yml</summary>
+
+  ```yaml
+  language: python
+  python:
+  - '3.6'
+  install:
+  - pip install ansible==2.9.7 'molecule[gce]<3' 'apache-libcloud<3'
+  script:
+  - ls -la
+  - molecule test --scenario-name gce
+  after_script:
+  - molecule destroy --scenario-name gce
+  before_install:
+  - openssl aes-256-cbc -K $encrypted_3b9f0b9d36d1_key -iv $encrypted_3b9f0b9d36d1_iv
+    -in secrets.tar.enc -out secrets.tar -d
+  - tar xvf secrets.tar
+  - mv google_compute_engine /home/travis/.ssh/
+  - chmod 0600 /home/travis/.ssh/google_compute_engine
+  env:
+    matrix:
+    - GCE_CREDENTIALS_FILE="$(pwd)/credentials.json"
+    global:
+    - USER=travis
+    - secure: l9VB1HYucFn5Y9Fw7wJ316DIEwVNdLolXIZYEvBHYhLa3/OB1kWlbfUz4C26fPwmHmksCTP26UeZ3DvMYKwbiYSJ47B1Hk+XPQA6UgJ/5qrKvdspTsVKE9XE10+F/cDHrYRNeEkpoH081caynUTwOKbJMtn6Plwutx8DQL4VASIaibNM6CMpu/NG1oVSDnlcoBgyeg2mhkck31xoHqozXKpyOlkKOpqq8IADntMjoyLmpd8vK7I/FUr0yzJ9qR0Kep8BxdaTwjPA4GDue+dcD3WWBESik+cblQclNLF/VVZgroh3X9CtXWfWCBm0LxvXlxOTlcTGlOWCIj0TwSRLPOTZpkcYENfV9p3bxBLiiEXgqcjDfr9JSdidDQGfrkkkdSmXquVOK1RAOIYPvPaeBM69ZpVIwOxJyrTxPUVIWNUwdqKCm9lojVgGxY8nhkA65K+qkhj65a9Ceg9MddOeqSZNwX+FUwlwtXhWMFzMHm9NerZVVBufy5a98yze7t9FwqZSNDhqBxsB+5gWqhtyv8/h8Grra8QmNJSYJnL1hG2IIaPmX6ZyMSNRlkxBM0tsINBGufAxkSNTSGUHh+9tB2bFBRPfZeH9YWmFeG6bt8O91B7RCn7UBXb/qK8U4fioYlRKQsp3P8RQY0JnEmMhjKix9u8aSQt2y9o0TwUUfM8=
+    - secure: IKhui0lKQZuL3OOAZ6yVA3S4eC6huo4r6Y1wruiDV5WWv8tw8DM5+gaQrsEa7SHcAgrREAs2a5qFx6QZqaU+88/SDqpY20k6HitvDxjhudpE/yGBQ6cAfdgLBzwngprZUaakTwI/NxkBVEHuHMd60gpDA2ZQDVYl2329pIjcX9CFDdFYtF7PDXzwm1tP4s7735WonRGFUpCATVoqou0QY+wg1xBHEVnmlWKcBnYnng8pJY8QrwU+MgtjfqDj79MCODUtSBkMILfRsDGLenWuLnpMFkpAlnGK9P0+Ci1uUvebGKHsDGZRi1xcp8kW8PQmnbmR2IhaX9Bs+kjNCr1dOZ9rzg2iKE600Jayt63KpqW29iRUbupf72PQ++mzV8UWGvyM2KdfR0sLgM2dFRbf2J2ZzErqkPp2YmHGSJeqkOJPG5Q9XBU78crMiPsx//fpRVcsqZrh4EocQlhHf6BdX2VEGnt447yIZC2447QdU6CarFQqHz88nmJFgOdNMK+5TShfakKQ7OfFxLOCsnjWEeSjxl3zqQxz9THb+hrvUyX2tvIbbUZfa6XyR3bcGOWIP1P5iA3GjemdvWuI6+jFJBvdgJzQNr1f9Ey0JwtpargTBs42/8QHJaR4scjd32xLz30JSqgA0bSBrJ2LabyhHKla0JO1DDx44XJvs39z17Y=
+    - secure: dGv7XRaGEtNCAjTMjvihNTo31cqna2yhODPK24YlhSVMTr47qXPkQBtpXiwGpwderqD+/rvWJbM2HzA1g3aTlAGcu+fMacWr33oLUy/DyZG/plrfeRiUqlPZrEeXuJVEm4JwVtYYUYu1sD8ifRr0R4+AGZX2P1VJF6maKOgN7eymqIYUi1BC+rJiyv2HtiQf5Goy5x5sx17mvsuUagM9RXDI7k1AvHPLW8JyHYN2XJza2kXxfqWeXG73i7jngpSfJbuAmpAEDDrQXzRUNv+susIs8LwAP9H9jAzpDetA1JsoxuFt8v/3PeInesUUIXuY6DsX+XqlmkMp0GvHWGVThXHCq0q0/Ke+Xotkdtk4WeYkhrrJBFBPY/2n5HvBMa6OoJoPe5yr36+WJq8Io/m5CUPRYfcstkSgrrXTh6JLIfbDGYJOHbI9wp0d8/i+qr1QZvbJ2RzYYo7YpA2dv8lVqRONR4IHgnKzjKruqKu7FNIFCybQHDXx/ZsuAapdHZgPPTLS4lW1pivMBp7OZaGtRspJTcLuBK68IPrPYJvTCL5dC6qoJaxhYKQ9p1JEWY5KKqnEmii3481y+qc7Ki+rEYQob3/R5D/d4wv9Tgh1EF0xflTrCsoj09p5i1B9GmconmvNdvZOD47MBz6ieAhUZYarnCphjKFyktv5RmTMI4Q=
+
+  ```
+
+  </details>
+* Обновлена версия роли до v0.2
+* Обновлены зависимости stage-окружения [stage/requirements.yml](ansible/environments/stage/requirements.yml). Обновлена версия требуемой роли
