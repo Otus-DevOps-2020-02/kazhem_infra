@@ -3,4 +3,4 @@
 
 - name: kazhem.db
   src: https://github.com/kazhem/ansible-role-db
-  version: v0.1
+  version: v0.2
