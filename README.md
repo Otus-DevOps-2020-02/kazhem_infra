@@ -26,6 +26,16 @@ Kazhemskiy Mikhail OTUS-DevOps-2020-02 Infra repository
   - [Homework10 Ansible роли, управление настройками нескольких окружений и best practices](#homework10-ansible-роли-управление-настройками-нескольких-окружений-и-best-practices)
     - [Задание со *](#Задание-со--5)
     - [Задание с **](#Задание-с--2)
+  - [Homework11 Разработка и тестирование Ansible ролей и плейбуков](#homework11-Разработка-и-тестирование-ansible-ролей-и-плейбуков)
+    - [Доработка ролей](#Доработка-ролей)
+    - [Задание со ☆](#Задание-со--6)
+- [check if MongoDB is enabled and running](#check-if-mongodb-is-enabled-and-running)
+- [check if configuration file contains the required line](#check-if-configuration-file-contains-the-required-line)
+- [check mongod is listening on 0.0.0.0:27017](#check-mongod-is-listening-on-000027017)
+  - [# ansible/playbooks/packer_app.yml](#h1-idansibleplaybookspacker_appyml-529ansibleplaybookspacker_appymlh1)
+  - [# ansible/playbooks/packer_db.yml](#h1-idansibleplaybookspacker_dbyml-529ansibleplaybookspacker_dbymlh1)
+  - [yaml](#yaml)
+      - [Автоматизированное тестирование в travic-ci внешней роли db средствами molecule в gce](#Автоматизированное-тестирование-в-travic-ci-внешней-роли-db-средствами-molecule-в-gce)
 
 # Домашние задания
 ## HomeWork 2: GitChatOps
@@ -792,3 +802,328 @@ testapp_port = 9292
   * `ansible-lint` для плейбуков Ansible
 
 * В README.md добавлен бейдж с статусом билда
+
+
+## Homework11 Разработка и тестирование Ansible ролей и плейбуков
+
+* Установлен [VirtualBox](https://www.virtualbox.org/wiki/Downloads)
+* Установлен [Vagrant](https://www.vagrantup.com/downloads.html)
+* Добавлен [Vagrantfile](ansible/Vagrantfile) с описанием terraform-инфраструктуры в vagrant
+* Выполнен `vagrant up` для скачивания и запуска образов в соответсвии с файлом
+* Краткий список команд
+  * Проверка что бокс скачан `vagrant box list`
+  * Посмотреть список запущенных ВМ `vagrant status`
+  * Подключиться к ВП по ssh `vagrant ssh VMNAME`
+  * Запустить провиженер `vagrant provision [VMNAME]`
+
+### Доработка ролей
+* [Провиженинг](https://www.vagrantup.com/docs/provisioning/) в Vagrant
+* Добавлен провиженер в [Vagrantfile](ansible/Vagrantfile) ВМ `db`
+  ```ruby
+  db.vm.provision "ansible" do |ansible|
+    ansible.playbook = "playbooks/site.yml"
+    ansible.groups = {
+    "db" => ["dbserver"],
+    "db:vars" => {"mongo_bind_ip" => "0.0.0.0"}
+    }
+  end
+  ```
+* Запущен провиженер `vagrant provision dbserver`
+* Возникла ошибка:
+  ```
+  fatal: [dbserver]: FAILED! => {"changed": false, "msg": "Could not find the requested service mongod: host"}
+  ```
+  Причина -- роль [db](ansible/roles/db) писалась с учётом базового packer-образа с уже установленной MongoDB
+* В роль [db](ansible/roles/db) добавлены задачи по установке MongoDB
+* Провиженинг завершён успешно
+* Добавлен плейбук [base.yml](ansible/playbooks/base.yml) для установки python если он не установлен.
+
+* Задачи роли [db](ansible/roles/db) из [db/tasks/main.yml](ansible/roles/db/tasks/main.yml) разнесены по файлам
+  * Задачи по установке MongoDB вынесены в [install_mongodb.yml](ansible/roles/db/tasks/install_mongodb.yml)
+  * Задачи по настройке MongoDB вынесены в [config_mongodb.yml](ansible/roles/db/tasks/config_mongodb.yml)
+* Для проверки, повторно выполнен провиженинг. Прошёл успешно
+
+* Задачи роли [app](ansible/roles/app) из [main.yml](ansible/roles/app/tasks/main.yml) разнесены по файлам
+  * Задачи по установке MongoDB вынесены в [ruby.yml](ansible/roles/app/tasks/ruby.yml)
+  * Задачи по настройке MongoDB вынесены в [puma.yml](ansible/roles/app/tasks/puma.yml)
+* Добавлен провиженер в [Vagrantfile](ansible/Vagrantfile) ВМ `app`
+  ```ruby
+  db.vm.provision "ansible" do |ansible|
+    ansible.playbook = "playbooks/site.yml"
+    ansible.groups = {
+    "db" => ["appserver"],
+    "app:vars" => { "db_host" => "10.10.10.10"}
+    }
+  end
+  ```
+* Запущен провиженер `vagrant provision appserver`. Возникла ошибка:
+  ```
+  TASK [app : Add config for DB connection] **************************************
+  fatal: [appserver]: FAILED! => {"changed": false, "checksum": "dfbe4b5cf3ec32d91d20045e2ee7f7b26c60ef34", "msg": "Destination directory /home/appuser does not exist"}
+  ```
+* Для исправления ошибки, параметризована роль [app](ansible/roles/app)
+  * В переменные по умолчанию [app/defaults/main.yml](ansible/roles/app/defaults/main.yml) добавлен `deploy_user: appuser`
+  * `puma.service` из `files` перемещён в `templates`
+  * В шаблоне [puma.service.j2](ansible/roles/app/templates/puma.service.j2) все упоминания пользователя `appuser` заменены на переменную `{{ deploy_user }}`
+  * В [puma.yml](ansible/roles/app/tasks/puma.yml) все упоминания пользователя `appuser` заменены на переменную `{{ deploy_user }}`
+* Также `appuser` заменён на `{{ deploy_user }}` в [deploy.yml](ansible/playbooks/deploy.yml)
+* В [Vagrantfile](ansible/Vagrantfile) добавлено переопределение переменных для провиженера
+  ```ruby
+  config.vm.define "appserver" do |app|
+    ...
+
+    app.vm.provision "ansible" do |ansible|
+      ...
+      ansible.extra_vars = {
+        "deploy_user" => "vagrant"
+      }
+    end
+  end
+  ```
+* Запущен провиженер `vagrant provision appserver`. Прошёл успешно
+
+* Проверена работа приложения [http://10.10.10.20:9292/](http://10.10.10.20:9292/). Успешно.
+* Конфигурация пересоздана, перепроверена и удалена
+  ```shell
+  vagrant destroy -f
+  vagrant up
+  #open in browser http://10.10.10.20:9292/
+  vagrant destroy -f
+  ```
+### Задание со ☆
+* Настройки nginx перенесены из `enviroments/stage/group_vars/app` в [Vagrantfile](ansible/Vagrantfile)
+  ```ruby
+    ansible.extra_vars = {
+      "deploy_user" => "vagrant",
+      "nginx_sites" => {
+        "default" => [
+          "listen 80",
+          "server_name \"reddit\"",
+          "location / {
+            proxy_pass http://127.0.0.1:9292;
+          }"
+        ]
+      }
+    }
+    ```
+* Результат проверен. Сайт открывается по адресу [http://10.10.10.20](http://10.10.10.20)
+
+
+### Тестирование ролей при помощи Molecule и Testinfra
+
+* В [ansible/requirements.txt](ansible/requirements.txt) добавлены зависимости от:
+  ```
+  ...
+  ansible>=2.9
+  molecule >=2.6, <3  # в 3й версии сильно нарушена обратная совместимость с версией 2
+  testinfra>=1.10
+  python-vagrant>=0.5.15
+  ```
+* Создание заготовки тестов `cd ansible/roles/db && molecule init scenario --scenario-name default -r db -d vagrant`
+* В [test_default.py](ansible/roles/db/molecule/default/tests/test_default.py) добавлены 2 теста
+  ```python
+  # check if MongoDB is enabled and running
+  def test_mongo_running_and_enabled(host):
+      mongo = host.service("mongod")
+      assert mongo.is_running
+      assert mongo.is_enabled
+
+  # check if configuration file contains the required line
+  def test_config_file(host):
+      config_file = host.file('/etc/mongod.conf')
+      assert config_file.contains('bindIp: 0.0.0.0')
+      assert config_file.is_file
+  ```
+* Создана ВМ для проверки роли `cd ansible/roles/db && molecule create`
+* Список созданных инстансов `cd ansible/roles/db && molecule list`
+* Подключиться к инстансу по ssh `cd ansible/roles/db && molecule login -h instance`
+* Проверка выполнения роли [playbook.yml](ansible/roles/db/molecule/default/playbook.yml) `cd ansible/roles/db && molecule converge`
+* Прогон тестов из [tests/test_default.py](ansible/roles/db/molecule/default/tests/test_default.py) `cd ansible/roles/db && molecule verify`
+
+* Докупентация по [testinfra](https://testinfra.readthedocs.io/en/latest/modules.html)
+* В тесты [test_default.py](ansible/roles/db/molecule/default/tests/test_default.py) добавлена проверка, что MongoDB слушает на порту 27017
+  ```python
+  # check mongod is listening on 0.0.0.0:27017
+  def test_mongo_socket(host):
+      socket = host.socket("tcp://0.0.0.0:27017")
+      assert socket.is_listening
+  ```
+### Переключение сбора образов пакером на использование ролей
+* Ранее в роль `db` добавлены таги `install` на таски в [install_mongo.yml](ansible/roles/db/tasks/install_mongo.yml)
+* Ранее в роль `app` добавлены таги `ruby` на таски в [puma.yml](ansible/roles/app/tasks/puma.yml)
+* Таски в плейбуке [packer_app.yml](ansible/playbooks/packer_app.yml) и в [packer_db.yml](ansible/playbooks/packer_db.yml) заменены на роли app и db соответсенно:
+  ```
+  # ansible/playbooks/packer_app.yml
+  ---
+  - name: Install Ruby
+    hosts: default
+    become: true
+    roles:
+      - app
+  ```
+  ```
+  # ansible/playbooks/packer_db.yml
+  ---
+  - name: Install MongoDB
+    hosts: default
+    become: true
+    roles:
+      - db
+  ```
+* Далее необходимо было заменить настроки провижининга в [app.json](packer/app.json) и [db.json](packer/db.json):
+  ```json
+  #packer/app.json
+  ...
+   "provisioners": [
+      {
+      "type": "ansible",
+      "playbook_file": "ansible/playbooks/packer_app.yml",
+      "ansible_env_vars": [
+        "ANSIBLE_ROLES_PATH=./ansible/roles"
+      ],
+      "extra_arguments": [
+        "--tags",
+        "ruby"
+      ]
+    }
+  ]
+  ```
+  ```json
+  #packer/db.json
+  ...
+   "provisioners": [
+      {
+      "type": "ansible",
+      "playbook_file": "ansible/playbooks/packer_db.yml",
+      "ansible_env_vars": [
+        "ANSIBLE_ROLES_PATH=./ansible/roles"
+      ],
+      "extra_arguments": [
+        "--tags",
+        "install"
+      ]
+    }
+  ]
+  ```
+### Задание со ☆ Подключение Travis CI для автоматического прогона тестов
+#### Вынесение роли в отдельный репозиторий
+Подготовка репозитория
+* Создан GitHub-репозиторий [ansible-role-db](https://github.com/kazhem/ansible-role-db)
+* Созданный пустой репозиторий склонирован в `../ansible-role-db`
+* Созержимое [ansible/roles/db](ansible/roles/db) перенесено в `../ansible-role-db`
+* При попытке выполнить `molecule converge` не удалось найти роль `db`.
+  **Исправлена** приведением файла `../ansible-role-db/molecule/default/playbook.yml` к следующему содержимому:
+  ```yaml
+  ---
+  ...
+    roles:
+      - role: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') | basename }}"
+* Текущей ревизии назначен тег `git tag v0.1`
+* Выполнен пуш репозитория в GitHub, включая теги `git push --tags`
+
+Переход на использование внешней роли
+* В зависимости [stage/requirements.yml](ansible/environments/stage/requirements.yml) и [prod/requirements.yml](ansible/environments/prod/requirements.yml) добавлена созданная роль
+  ```yaml
+  - name: kazhem.db
+    src: https://github.com/kazhem/ansible-role-db
+    version: v0.1
+  ```
+* Роль добавлена в [.gitignore](.gitignore)
+* Выполнена установка зависимостей
+  ```shell
+  ansible-galaxy install -r environments/stage/requirements.yml
+  ```
+* Плейбук [db.yml](ansible/playbooks/db.yml) переделан на использование новой роли
+  ```yaml
+  - name: Configure MongoDB
+    hosts: db
+    become: true
+    vars:
+      mongo_bind_ip: 0.0.0.0
+    roles:
+      - kazhem.db
+  ```
+
+* Содержимое [app/templates/db_config.j2](ansible/roles/app/templates/db_config.j2) исправлено на
+  ```jinja
+  {% if env == 'local' %}
+  DATABASE_URL={{ db_host }}
+  {% elif env in ['stage', 'prod'] %}
+  DATABASE_URL={{ hostvars[groups['db'][0]]['ansible_internal']}}
+  {% endif %}
+  ```
+  В случае запуска в локальном окружении, значение переменной берётся из переменной `db_host`. Иначе получается динамически с первого хоста в группе `db`
+
+* Плейбук `packer_db.yml` также настроена на использование внешней роли
+
+#### Автоматизированное тестирование в travic-ci внешней роли db средствами molecule в gce
+[Пример](https://github.com/Artemmkin/test-ansible-role-with-travis) роли и еще [пример](https://github.com/jonashackt/molecule-ansible-google-cloud)
+
+
+* Создан ssh-ключ `ssh-keygen -t rsa -f google_compute_engine -C 'travis' -q -N ''`
+* Публичный ключ добавлен в  проект infra в gcp через веб интерфейс
+* Создан сервис-аккаунт (IAM & admin -> Service accounts) `travis-ci`
+  * Присвоена роль `Editor`
+* Для корректной работы описанных действий нужен molecul версии ниже 3й
+* Создан шаблон сценрия gce:
+  ```
+  molecule init scenario --scenario-name gce  -d gce
+  ```
+* Скопированы тесты и переменные из сценария default (см выше)
+* Заполнена информация о роли [meta](meta/main.yml)
+* **ПРИМЕЧАНИЕ** Для отключения опции `no_log` при создании инстанса, нужно в плейбуке `molecule/gce/create.yml` и `destroy.yml` добавить переменную `molecule_no_log` в секцию `vars`.
+* Важно использование travis-ci.com (а не .org)
+* В `../ansible-role-db/.travis.yml` добавлены переменные окружения в **зашифрованном** виде
+  ```shell
+  travis encrypt GCE_SERVICE_ACCOUNT_EMAIL='travis-ci@infra-12345.iam.gserviceaccount.com' --add --pro
+  travis encrypt GCE_CREDENTIALS_FILE='$(PWD)/credentials.json' --add --pro
+  travis encrypt GCE_PROJECT_ID='infra-12345' --add --pro
+  ```
+* Зашифрованы файлы
+  ```shell
+  tar cvf secrets.tar credentials.json google_compute_engine
+  travis login --pro
+  travis encrypt-file secrets.tar --add --pro
+  ```
+* Удалось добиться успешного подключения к GCE во время билда (первая стадия `destroy`), после указания в секретный переменных пути к файлам в текущей директории через:
+  ```
+  env:
+  matrix:
+  - GCE_CREDENTIALS_FILE="$(pwd)/credentials.json"
+  ```
+* Также можно добавлять секретные переменный окружения через веб интерфейс на сайте travis-ci.com
+* В `../ansible-role-db/.travis.yml` добавлена переменная `USER`
+* Содержимое `../ansible-role-db/.travis.yml` после всех модификаций (исключены секреты)
+  <details><summary>.travis.yml</summary>
+
+  ```yaml
+  language: python
+  python:
+  - '3.6'
+  install:
+  - pip install ansible==2.9.7 'molecule[gce]<3' 'apache-libcloud<3'
+  script:
+  - ls -la
+  - molecule test --scenario-name gce
+  after_script:
+  - molecule destroy --scenario-name gce
+  before_install:
+  - openssl aes-256-cbc -K $encrypted_3b9f0b9d36d1_key -iv $encrypted_3b9f0b9d36d1_iv
+    -in secrets.tar.enc -out secrets.tar -d
+  - tar xvf secrets.tar
+  - mv google_compute_engine /home/travis/.ssh/
+  - chmod 0600 /home/travis/.ssh/google_compute_engine
+  env:
+    matrix:
+    - GCE_CREDENTIALS_FILE="$(pwd)/credentials.json"
+    global:
+    - USER=travis
+    - secure: l9VB1HYucFn5Y9Fw7wJ316DIEwVNdLolXIZYEvBHYhLa3/OB1kWlbfUz4C26fPwmHmksCTP26UeZ3DvMYKwbiYSJ47B1Hk+XPQA6UgJ/5qrKvdspTsVKE9XE10+F/cDHrYRNeEkpoH081caynUTwOKbJMtn6Plwutx8DQL4VASIaibNM6CMpu/NG1oVSDnlcoBgyeg2mhkck31xoHqozXKpyOlkKOpqq8IADntMjoyLmpd8vK7I/FUr0yzJ9qR0Kep8BxdaTwjPA4GDue+dcD3WWBESik+cblQclNLF/VVZgroh3X9CtXWfWCBm0LxvXlxOTlcTGlOWCIj0TwSRLPOTZpkcYENfV9p3bxBLiiEXgqcjDfr9JSdidDQGfrkkkdSmXquVOK1RAOIYPvPaeBM69ZpVIwOxJyrTxPUVIWNUwdqKCm9lojVgGxY8nhkA65K+qkhj65a9Ceg9MddOeqSZNwX+FUwlwtXhWMFzMHm9NerZVVBufy5a98yze7t9FwqZSNDhqBxsB+5gWqhtyv8/h8Grra8QmNJSYJnL1hG2IIaPmX6ZyMSNRlkxBM0tsINBGufAxkSNTSGUHh+9tB2bFBRPfZeH9YWmFeG6bt8O91B7RCn7UBXb/qK8U4fioYlRKQsp3P8RQY0JnEmMhjKix9u8aSQt2y9o0TwUUfM8=
+    - secure: IKhui0lKQZuL3OOAZ6yVA3S4eC6huo4r6Y1wruiDV5WWv8tw8DM5+gaQrsEa7SHcAgrREAs2a5qFx6QZqaU+88/SDqpY20k6HitvDxjhudpE/yGBQ6cAfdgLBzwngprZUaakTwI/NxkBVEHuHMd60gpDA2ZQDVYl2329pIjcX9CFDdFYtF7PDXzwm1tP4s7735WonRGFUpCATVoqou0QY+wg1xBHEVnmlWKcBnYnng8pJY8QrwU+MgtjfqDj79MCODUtSBkMILfRsDGLenWuLnpMFkpAlnGK9P0+Ci1uUvebGKHsDGZRi1xcp8kW8PQmnbmR2IhaX9Bs+kjNCr1dOZ9rzg2iKE600Jayt63KpqW29iRUbupf72PQ++mzV8UWGvyM2KdfR0sLgM2dFRbf2J2ZzErqkPp2YmHGSJeqkOJPG5Q9XBU78crMiPsx//fpRVcsqZrh4EocQlhHf6BdX2VEGnt447yIZC2447QdU6CarFQqHz88nmJFgOdNMK+5TShfakKQ7OfFxLOCsnjWEeSjxl3zqQxz9THb+hrvUyX2tvIbbUZfa6XyR3bcGOWIP1P5iA3GjemdvWuI6+jFJBvdgJzQNr1f9Ey0JwtpargTBs42/8QHJaR4scjd32xLz30JSqgA0bSBrJ2LabyhHKla0JO1DDx44XJvs39z17Y=
+    - secure: dGv7XRaGEtNCAjTMjvihNTo31cqna2yhODPK24YlhSVMTr47qXPkQBtpXiwGpwderqD+/rvWJbM2HzA1g3aTlAGcu+fMacWr33oLUy/DyZG/plrfeRiUqlPZrEeXuJVEm4JwVtYYUYu1sD8ifRr0R4+AGZX2P1VJF6maKOgN7eymqIYUi1BC+rJiyv2HtiQf5Goy5x5sx17mvsuUagM9RXDI7k1AvHPLW8JyHYN2XJza2kXxfqWeXG73i7jngpSfJbuAmpAEDDrQXzRUNv+susIs8LwAP9H9jAzpDetA1JsoxuFt8v/3PeInesUUIXuY6DsX+XqlmkMp0GvHWGVThXHCq0q0/Ke+Xotkdtk4WeYkhrrJBFBPY/2n5HvBMa6OoJoPe5yr36+WJq8Io/m5CUPRYfcstkSgrrXTh6JLIfbDGYJOHbI9wp0d8/i+qr1QZvbJ2RzYYo7YpA2dv8lVqRONR4IHgnKzjKruqKu7FNIFCybQHDXx/ZsuAapdHZgPPTLS4lW1pivMBp7OZaGtRspJTcLuBK68IPrPYJvTCL5dC6qoJaxhYKQ9p1JEWY5KKqnEmii3481y+qc7Ki+rEYQob3/R5D/d4wv9Tgh1EF0xflTrCsoj09p5i1B9GmconmvNdvZOD47MBz6ieAhUZYarnCphjKFyktv5RmTMI4Q=
+
+  ```
+
+  </details>
+* Обновлена версия роли до v0.2
+* Обновлены зависимости stage-окружения [stage/requirements.yml](ansible/environments/stage/requirements.yml). Обновлена версия требуемой роли
